@@ -1,257 +1,96 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useAuth } from "../context/AuthContext.jsx";
 
-function getCardDigits(value) {
-  return value.replace(/\D/g, "");
-}
-
-function isValidExpiry(value) {
-  const match = value.match(/^(0[1-9]|1[0-2])\/(\d{2})$/);
-
-  if (!match) {
-    return false;
+const luhn = (n) => {
+  let sum = 0, alt = false;
+  for (let i = n.length - 1; i >= 0; i--) {
+    let d = +n[i];
+    if (alt && (d *= 2) > 9) d -= 9;
+    sum += d; alt = !alt;
   }
-
-  const month = Number(match[1]);
-  const year = 2000 + Number(match[2]);
-
-  const now = new Date();
-  const currentMonth = now.getFullYear() * 12 + now.getMonth();
-  const expiryMonth = year * 12 + month - 1;
-
-  return expiryMonth >= currentMonth;
-}
-
-function isValidCardNumber(value) {
-  const digits = getCardDigits(value);
-
-  if (digits.length < 13 || digits.length > 19) {
-    return false;
-  }
-
-  let sum = 0;
-  let doubleDigit = false;
-
-  for (let i = digits.length - 1; i >= 0; i--) {
-    let digit = Number(digits[i]);
-
-    if (doubleDigit) {
-      digit *= 2;
-
-      if (digit > 9) {
-        digit -= 9;
-      }
-    }
-
-    sum += digit;
-    doubleDigit = !doubleDigit;
-  }
-
   return sum % 10 === 0;
-}
+};
 
-function PaymentModal({ onClose, onConfirm }) {
-  const [cardholder, setCardholder] = useState("");
-  const [cardNumber, setCardNumber] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [cvv, setCvv] = useState("");
+export default function PaymentModal({ onClose, onSuccess }) {
+  const { upgrade } = useAuth();
+  const [f, setF] = useState({ name: "", cardNumber: "", expiry: "", cvc: "" });
+  const [errors, setErrors] = useState({});
+  const [serverError, setServerError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const onNumber = (v) =>
+    set("cardNumber", v.replace(/\D/g, "").slice(0, 19).replace(/(.{4})/g, "$1 ").trim());
+  const onExpiry = (v) => {
+    const d = v.replace(/\D/g, "").slice(0, 4);
+    set("expiry", d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d);
+  };
 
-    setError("");
+  const validate = () => {
+    const e = {};
+    const num = f.cardNumber.replace(/\s/g, "");
+    const m = /^(\d{2})\/(\d{2})$/.exec(f.expiry);
+    if (!f.name.trim()) e.name = "Enter the name on the card.";
+    if (!/^\d{13,19}$/.test(num) || !luhn(num)) e.cardNumber = "Card number is not valid.";
+    if (!m || +m[1] < 1 || +m[1] > 12) e.expiry = "Use MM/YY.";
+    else if (new Date(2000 + +m[2], +m[1], 1) <= new Date()) e.expiry = "This card has expired.";
+    if (!/^\d{3,4}$/.test(f.cvc)) e.cvc = "3 or 4 digits.";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
 
-    if (!cardholder.trim()) {
-      setError("Please enter the cardholder name.");
-      return;
-    }
-
-    if (!isValidCardNumber(cardNumber)) {
-      setError("Please enter a valid demonstration card number.");
-      return;
-    }
-
-    if (!isValidExpiry(expiry)) {
-      setError("Enter a valid, unexpired expiry date in MM/YY format.");
-      return;
-    }
-
-    if (!/^\d{3,4}$/.test(cvv)) {
-      setError("Please enter a valid 3- or 4-digit CVV.");
-      return;
-    }
-
-    // This is a coursework demonstration, not a payment gateway.
-    // Never enter real card details.
-
-    setSubmitting(true);
-
+  const submit = async (ev) => {
+    ev.preventDefault();
+    setServerError("");
+    if (!validate()) return;
+    setBusy(true);
     try {
-      await onConfirm();
-
-      setCardholder("");
-      setCardNumber("");
-      setExpiry("");
-      setCvv("");
+      onSuccess(await upgrade(f));
     } catch (err) {
-      setError(err.message || "Unable to upgrade your plan.");
+      setServerError(err.message);
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
-  }
+  };
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !submitting) {
-          onClose();
-        }
-      }}
-    >
-      <section
-        className="payment-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="payment-modal-title"
-      >
-        <div className="modal-header">
-          <div>
-            <p className="eyebrow">DEV@DEAKIN PREMIUM</p>
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="modal" onSubmit={submit} noValidate role="dialog" aria-modal="true" aria-labelledby="pay-title">
+        <h2 id="pay-title">Upgrade to Premium</h2>
+        <p className="muted">$9 / month. Demo only, no real payment is taken.</p>
 
-            <h2 id="payment-modal-title">Upgrade your plan</h2>
-
-            <p>Coursework demonstration only.</p>
-          </div>
-
-          <button
-            type="button"
-            className="modal-close"
-            onClick={onClose}
-            disabled={submitting}
-            aria-label="Close payment modal"
-          >
-            ×
-          </button>
+        <label>Name on card
+          <input value={f.name} onChange={(e) => set("name", e.target.value)} autoComplete="cc-name" autoFocus />
+          {errors.name && <small className="err">{errors.name}</small>}
+        </label>
+        <label>Card number
+          <input value={f.cardNumber} onChange={(e) => onNumber(e.target.value)} inputMode="numeric" placeholder="4242 4242 4242 4242" autoComplete="cc-number" />
+          {errors.cardNumber && <small className="err">{errors.cardNumber}</small>}
+        </label>
+        <div className="row">
+          <label>Expiry
+            <input value={f.expiry} onChange={(e) => onExpiry(e.target.value)} placeholder="MM/YY" inputMode="numeric" autoComplete="cc-exp" />
+            {errors.expiry && <small className="err">{errors.expiry}</small>}
+          </label>
+          <label>CVC
+            <input value={f.cvc} onChange={(e) => set("cvc", e.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" autoComplete="cc-csc" />
+            {errors.cvc && <small className="err">{errors.cvc}</small>}
+          </label>
         </div>
 
-        <div className="payment-summary">
-          <div>
-            <span>Paid Plan</span>
-            <strong>₹299 per month</strong>
-          </div>
+        {serverError && <p className="alert error">{serverError}</p>}
 
-          <span className="payment-badge">Test mode</span>
+        <div className="modal-actions">
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn" disabled={busy}>{busy ? "Processing…" : "Pay $9 and upgrade"}</button>
         </div>
-
-        <form onSubmit={handleSubmit} className="payment-form">
-          <div className="form-field">
-            <label htmlFor="cardholder">Cardholder name</label>
-
-            <input
-              id="cardholder"
-              value={cardholder}
-              onChange={(event) => setCardholder(event.target.value)}
-              autoComplete="off"
-              maxLength={100}
-              required
-            />
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="card-number">Demonstration card number</label>
-
-            <input
-              id="card-number"
-              value={cardNumber}
-              onChange={(event) => {
-                const digits = getCardDigits(event.target.value);
-
-                if (digits.length <= 19) {
-                  setCardNumber(digits);
-                }
-              }}
-              inputMode="numeric"
-              autoComplete="off"
-              placeholder="Enter fictional test data"
-              required
-            />
-          </div>
-
-          <div className="payment-row">
-            <div className="form-field">
-              <label htmlFor="card-expiry">Expiry (MM/YY)</label>
-
-              <input
-                id="card-expiry"
-                value={expiry}
-                onChange={(event) => {
-                  const value = event.target.value
-                    .replace(/[^\d/]/g, "")
-                    .slice(0, 5);
-
-                  setExpiry(value);
-                }}
-                placeholder="MM/YY"
-                autoComplete="off"
-                required
-              />
-            </div>
-
-            <div className="form-field">
-              <label htmlFor="card-cvv">CVV</label>
-
-              <input
-                id="card-cvv"
-                value={cvv}
-                onChange={(event) => {
-                  setCvv(
-                    event.target.value.replace(/\D/g, "").slice(0, 4)
-                  );
-                }}
-                inputMode="numeric"
-                autoComplete="off"
-                required
-              />
-            </div>
-          </div>
-
-          <p className="payment-disclaimer">
-            This is a coursework demonstration. No payment is processed.
-            Do not enter real payment details.
-          </p>
-
-          {error && (
-            <div className="form-error" role="alert">
-              {error}
-            </div>
-          )}
-
-          <div className="modal-actions">
-            <button
-              type="button"
-              className="button button-outline"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              className="button button-primary"
-              disabled={submitting}
-            >
-              {submitting ? "Processing..." : "Confirm Upgrade"}
-            </button>
-          </div>
-        </form>
-      </section>
+      </form>
     </div>
   );
 }
-
-export default PaymentModal;
